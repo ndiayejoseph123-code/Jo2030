@@ -23,15 +23,19 @@ function isRateLimited(ip){
 }
 const headers = { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" };
 
+// AUTO-DETECTION du modèle disponible - plus besoin de mettre en dur
 async function getAvailableModel(apiKey) {
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
     const data = await res.json();
-    if (!data.models) return "gemini-2.5-flash-lite";
+    if (!data.models) return null;
+    // On cherche le meilleur modèle flash qui supporte generateContent
     const candidates = data.models
       .filter(m => m.supportedGenerationMethods?.includes("generateContent"))
       .map(m => m.name.replace("models/",""))
       .filter(name => name.includes("flash"));
+
+    // Ordre de préférence 2026: 3.8-flash, 3-flash, 2.5-flash-lite, 2.5-flash, 2.0-flash-lite
     const order = ["3.8-flash", "3-flash", "2.5-flash-lite", "2.5-flash", "2.0-flash-lite", "2.0-flash", "flash-latest"];
     for (const pref of order) {
       const found = candidates.find(c => c.includes(pref));
@@ -39,7 +43,7 @@ async function getAvailableModel(apiKey) {
     }
     return candidates[0] || "gemini-2.5-flash-lite";
   } catch {
-    return "gemini-2.5-flash-lite";
+    return "gemini-2.5-flash-lite"; // fallback sûr
   }
 }
 
@@ -63,12 +67,17 @@ exports.handler = async (event) => {
 
   const disciplineType = detectDiscipline(titre);
   const systemText = SYSTEM_PROMPTS[disciplineType] + "\n" + BASE_JSON;
+  
+  // Détection auto du modèle - NE PLUS METTRE EN DUR
   let model = await getAvailableModel(apiKey);
+  console.log(`MODEL AUTO-DETECTED: ${model} | ${classe} - ${titre}`);
 
   const modelsToTry = [model, "gemini-3.8-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"];
 
   let lastError = null;
-  for (const m of [...new Set(modelsToTry)]) {
+  for (let i=0; i<[...new Set(modelsToTry)].length; i++) {
+    const m = [...new Set(modelsToTry)][i];
+    if (i>0) await new Promise(r=>setTimeout(r, 800)); // petite pause entre modèles
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
       const res = await fetch(url, {
@@ -83,7 +92,8 @@ exports.handler = async (event) => {
       const data = await res.json();
       if (!res.ok) {
         lastError = data?.error?.message || "Erreur";
-        if (lastError.includes("Quota") || lastError.includes("429") || lastError.includes("not found") || lastError.includes("no longer available") || lastError.includes("404")) continue;
+        console.error(`MODEL ${m} FAILED: ${lastError}`);
+        if (lastError.includes("Quota") || lastError.includes("429") || lastError.includes("not found") || lastError.includes("no longer available") || lastError.includes("404") || lastError.includes("high demand") || lastError.includes("overloaded") || lastError.includes("503") || lastError.includes("500") || lastError.includes("UNAVAILABLE") || lastError.includes("temporarily")) continue;
         return { statusCode: 502, headers, body: JSON.stringify({ error: lastError }) };
       }
       let text = data?.candidates?.[0]?.content?.parts?.map(p=>p.text||"").join("")||"";

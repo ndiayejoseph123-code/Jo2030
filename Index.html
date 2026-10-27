@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Générateur de fiches pédagogiques</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @media print { .no-print { display: none !important; } body { background: #fff; } }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+  <main class="max-w-4xl mx-auto p-4 sm:p-8">
+    <header class="text-center mb-6 no-print">
+      <h1 class="text-2xl sm:text-3xl font-bold text-indigo-700">Fiches pédagogiques</h1>
+      <p class="text-slate-500 mt-1">Saisissez la classe et la leçon, l'IA rédige la fiche.</p>
+    </header>
+
+    <form id="form" class="bg-white rounded-xl shadow p-5 space-y-4 no-print">
+      <div>
+        <label class="block text-sm font-medium mb-1" for="classe">Classe</label>
+        <input id="classe" required maxlength="50" placeholder="ex : CE2"
+          class="w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1" for="titre">Titre de la leçon</label>
+        <input id="titre" required maxlength="200" placeholder="ex : Le relief du Sénégal"
+          class="w-full border rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+      </div>
+      <button id="btn" type="submit"
+        class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition disabled:opacity-60">
+        Générer la fiche pédagogique
+      </button>
+    </form>
+
+    <div id="loader" class="hidden flex flex-col items-center py-10 no-print">
+      <div class="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
+      <p class="mt-3 text-slate-500">Génération en cours…</p>
+    </div>
+
+    <div id="error" class="hidden mt-4 bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 no-print"></div>
+
+    <section id="result" class="hidden mt-6">
+      <div class="flex justify-end mb-2 no-print">
+        <button id="print" class="text-sm bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg">Imprimer / PDF</button>
+      </div>
+      <div id="fiche"></div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const list = (v) =>
+      Array.isArray(v)
+        ? `<ul class="list-disc pl-5 space-y-1">${v.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`
+        : esc(v);
+
+    const LABELS = [
+      ["classe", "Classe"], ["sous_domaine", "Sous-domaine"], ["duree", "Durée"],
+      ["discipline", "Discipline"], ["cb", "CB (Compétence de Base)"], ["palier", "Palier"],
+      ["oa", "OA (Objectif d'Apprentissage)"], ["os", "OS (Objectif Spécifique)"],
+      ["contenus", "Contenus"], ["moyens_materiels", "Moyens matériels"], ["documentation", "Documentation"],
+    ];
+
+    function render(f) {
+      const i = f.informations || {};
+      const infos = LABELS.map(([k, l]) => `
+        <tr class="border-b last:border-0">
+          <th class="text-left align-top bg-indigo-50 p-3 w-2/5 sm:w-1/3 font-semibold">${l}</th>
+          <td class="p-3">${list(i[k])}</td>
+        </tr>`).join("");
+
+      const steps = (f.deroulement || []).map((s, n) => `
+        <tr class="border-b last:border-0 align-top">
+          <td class="p-3 bg-indigo-50 font-semibold">${n + 1}. ${esc(s.etape)}<br>
+            <span class="text-xs font-normal text-slate-500">${esc(s.duree)}</span></td>
+          <td class="p-3">${list(s.part_du_maitre)}</td>
+          <td class="p-3">${list(s.part_des_eleves)}</td>
+        </tr>`).join("");
+
+      $("fiche").innerHTML = `
+        <div class="bg-white rounded-xl shadow overflow-hidden mb-6">
+          <h2 class="bg-indigo-700 text-white font-bold p-3">Informations générales</h2>
+          <table class="w-full text-sm">${infos}</table>
+        </div>
+        <div class="bg-white rounded-xl shadow overflow-x-auto">
+          <h2 class="bg-indigo-700 text-white font-bold p-3">Déroulement de la leçon</h2>
+          <table class="w-full text-sm min-w-[600px]">
+            <thead class="bg-slate-100">
+              <tr><th class="p-3 text-left">Étape</th><th class="p-3 text-left">Part du Maître</th><th class="p-3 text-left">Part des Élèves</th></tr>
+            </thead>
+            <tbody>${steps}</tbody>
+          </table>
+        </div>`;
+    }
+
+    $("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      $("error").classList.add("hidden");
+      $("result").classList.add("hidden");
+      $("loader").classList.remove("hidden");
+      $("btn").disabled = true;
+      try {
+        const res = await fetch("/.netlify/functions/generate-fiche", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ classe: $("classe").value, titre: $("titre").value }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Erreur inconnue");
+        render(data);
+        $("result").classList.remove("hidden");
+      } catch (err) {
+        $("error").textContent = err.message;
+        $("error").classList.remove("hidden");
+      } finally {
+        $("loader").classList.add("hidden");
+        $("btn").disabled = false;
+      }
+    });
+
+    $("print").addEventListener("click", () => window.print());
+  </script>
+</body>
+  </html>

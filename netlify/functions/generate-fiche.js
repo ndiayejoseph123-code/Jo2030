@@ -28,7 +28,7 @@ async function getAvailableModel(apiKey) {
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
     const data = await res.json();
-    if (!data.models) return null;
+    if (!data.models) return "gemini-2.5-flash-lite";
     // On cherche le meilleur modèle flash qui supporte generateContent
     const candidates = data.models
       .filter(m => m.supportedGenerationMethods?.includes("generateContent"))
@@ -42,7 +42,8 @@ async function getAvailableModel(apiKey) {
       if (found) return found;
     }
     return candidates[0] || "gemini-2.5-flash-lite";
-  } catch {
+  } catch (e) {
+    console.error("getAvailableModel error", e);
     return "gemini-2.5-flash-lite"; // fallback sûr
   }
 }
@@ -98,7 +99,17 @@ exports.handler = async (event) => {
       }
       let text = data?.candidates?.[0]?.content?.parts?.map(p=>p.text||"").join("")||"";
       text = text.replace(/^```json\s*|```$/g,"").trim();
-      const fiche = JSON.parse(text);
+      if (!text) {
+        lastError = "Réponse vide de Gemini";
+        continue;
+      }
+      let fiche;
+      try { fiche = JSON.parse(text); }
+      catch (parseErr) {
+        console.error("JSON PARSE FAILED", text.slice(0,500));
+        lastError = "JSON invalide: " + text.slice(0,200);
+        continue;
+      }
       CACHE.set(cacheKey, fiche);
       if (CACHE.size > 300) CACHE.delete(CACHE.keys().next().value);
       return { statusCode: 200, headers, body: JSON.stringify(fiche) };

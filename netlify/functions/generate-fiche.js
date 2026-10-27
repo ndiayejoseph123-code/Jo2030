@@ -25,11 +25,11 @@ const headers = { "Content-Type": "application/json", "Access-Control-Allow-Orig
 
 // MODELES AVEC QUOTA GRATUIT ELEVE (20/jour c'est fini pour 2.5-flash)
 const MODELS_FALLBACK = [
-  "gemini-1.5-flash",           // 1500/jour gratuit - LE MEILLEUR POUR TOI
-  "gemini-1.5-flash-8b",        // 1500/jour
+  "gemini-2.0-flash",           // 1500/jour - ACTUELLEMENT LE MEILLEUR GRATUIT
   "gemini-2.0-flash-lite",      // 1500/jour
-  "gemini-2.0-flash",           // 1500/jour
-  "gemini-2.5-flash-lite"       // plus de quota que 2.5-flash normal
+  "gemini-2.5-flash-lite",      // 1000/jour environ
+  "gemini-flash-latest",        // alias qui suit le meilleur
+  "gemini-2.5-flash"            // dernier recours 20/jour
 ];
 
 exports.handler = async (event) => {
@@ -53,7 +53,7 @@ exports.handler = async (event) => {
 
   const disciplineType = detectDiscipline(titre);
   const systemText = SYSTEM_PROMPTS[disciplineType] + "\n" + BASE_JSON;
-  const preferredModel = "gemini-1.5-flash"; // FORCE en dur, pas besoin d'aller dans Netlify
+  const preferredModel = "gemini-2.0-flash"; // FIX 2026: 1.5-flash n'existe plus en v1beta, 2.0-flash = 1500/jour
   
   // On essaie d'abord le modèle préféré, puis les fallbacks
   const modelsToTry = [preferredModel, ...MODELS_FALLBACK.filter(m=>m!==preferredModel)];
@@ -76,7 +76,7 @@ exports.handler = async (event) => {
       if (!res.ok) {
         lastError = data?.error?.message || "Erreur";
         console.error(`MODEL ${model} FAILED: ${lastError}`);
-        if (lastError.includes("Quota exceeded") || lastError.includes("429")) continue; // essaie modèle suivant
+        if (lastError.includes("Quota exceeded") || lastError.includes("429") || lastError.includes("not found") || lastError.includes("not supported") || lastError.includes("404")) continue; // essaie modèle suivant
         else return { statusCode: 502, headers, body: JSON.stringify({ error: lastError }) };
       }
       let text = data?.candidates?.[0]?.content?.parts?.map(p=>p.text||"").join("")||"";
@@ -94,4 +94,3 @@ exports.handler = async (event) => {
 
   return { statusCode: 429, headers, body: JSON.stringify({ error: `Quota dépassé sur tous les modèles. Dernier: ${lastError}. Réessaie demain ou ajoute une 2e clé API. Voir https://ai.dev/rate-limit` }) };
 };
-    

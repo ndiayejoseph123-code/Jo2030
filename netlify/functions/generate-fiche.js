@@ -1,7 +1,7 @@
 const SYSTEM_PROMPTS = {
-  eveil: `Tu es un conseiller pédagogique expert du système éducatif sénégalais (Curriculum de l'Éducation de Base CEB, approche par compétences).
+  eveil: `Tu es un conseiller pédagogique expert du système éducatif sénégalais (Curriculum de l'Éducation de Base CEB).
 Discipline: HISTOIRE, GEOGRAPHIE, IST, VIVRE ENSEMBLE (Éveil).
-Démarche OFFICIELLE à respecter OBLIGATOIREMENT (document Le Miroir adapté au CEB):
+Démarche OFFICIELLE Le Miroir adapté au CEB:
 1. Révision / Rappel des acquis
 2. Imprégnation / Observation libre
 3. Analyse / Observation dirigée et exploitation
@@ -27,7 +27,7 @@ Démarche OFFICIELLE Lecture:
 5. Évaluation / Application et lecture à haute voix`,
 
   grammaire: `Tu es un conseiller pédagogique expert du CEB sénégalais.
-Discipline: FRANCAIS Grammaire / Conjugaison / Orthographe / Vocabulaire / Expression.
+Discipline: FRANCAIS Grammaire/Conjugaison/Orthographe/Vocabulaire.
 Démarche OFFICIELLE Langue:
 1. Révision / Rappel des acquis
 2. Imprégnation / Présentation du texte support
@@ -36,48 +36,41 @@ Démarche OFFICIELLE Langue:
 5. Évaluation / Application`
 };
 
-const BASE_JSON_STRUCTURE = `
-À partir de la classe et du titre de la leçon fournis, produis UNIQUEMENT un objet JSON valide (sans markdown, sans texte autour) respectant EXACTEMENT cette structure :
-
+const BASE_JSON = `
+Produis UNIQUEMENT un objet JSON valide (sans markdown) respectant EXACTEMENT:
 {
-  "informations": {
-    "classe": "",
-    "sous_domaine": "",
-    "duree": "45 min ou 60 min selon la discipline",
-    "discipline": "",
-    "cb": "Compétence de Base",
-    "palier": "",
-    "oa": "Objectif d'Apprentissage",
-    "os": "Objectif Spécifique (formulé avec un verbe d'action observable)",
-    "contenus": "",
-    "moyens_materiels": "",
-    "documentation": ""
-  },
-  "deroulement": [
-    { "etape": "INTITULE EXACT DE LA DEMARCHE", "duree": "", "part_du_maitre": ["..."], "part_des_eleves": ["..."] },
-    { "etape": "INTITULE EXACT DE LA DEMARCHE", "duree": "", "part_du_maitre": ["..."], "part_des_eleves": ["..."] },
-    { "etape": "INTITULE EXACT DE LA DEMARCHE", "duree": "", "part_du_maitre": ["..."], "part_des_eleves": ["..."] },
-    { "etape": "INTITULE EXACT DE LA DEMARCHE", "duree": "", "part_du_maitre": ["..."], "part_des_eleves": ["..."] },
-    { "etape": "INTITULE EXACT DE LA DEMARCHE", "duree": "", "part_du_maitre": ["..."], "part_des_eleves": ["..."] }
-  ]
+  "informations": { "classe": "", "sous_domaine": "", "duree": "", "discipline": "", "cb": "", "palier": "", "oa": "", "os": "", "contenus": "", "moyens_materiels": "", "documentation": "" },
+  "deroulement": [ { "etape": "INTITULE EXACT", "duree": "", "part_du_maitre": ["..."], "part_des_eleves": ["..."] } ]
 }
-
-Règles strictes :
-- Exactement 5 étapes, dans cet ordre et avec les intitulés EXACTS de la démarche officielle indiquée ci-dessus. Ne pas inventer d'autres intitulés.
-- "part_du_maitre" et "part_des_eleves" sont des tableaux de phrases courtes et concrètes (consignes, questions, activités réelles), adaptées au niveau de la classe.
-- Contenu adapté au contexte sénégalais (exemples, lieux, matériel accessible).
-- Le résumé de l'étape 4 doit être rédigé en toutes lettres.
-- Écris en français correct. Ne renvoie rien d'autre que le JSON.
+Règles: Exactement 5 étapes avec les intitulés EXACTS de la démarche ci-dessus. part_du_maitre et part_des_eleves = phrases courtes concrètes. Contexte sénégalais. Résumé étape 4 en toutes lettres. Français correct.
 `;
 
 function detectDiscipline(titre) {
   const t = titre.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  
-  if (/math|calcul|numeration|geometrie|mesure|probleme|addition|soustraction|multiplication|division|fraction/.test(t)) return "mathematiques";
+  if (/math|calcul|numeration|geometrie|mesure|probleme|addition|soustraction|multiplication|division|fraction|resolution/.test(t)) return "mathematiques";
   if (/lecture|texte|comprehension|alphabet/.test(t)) return "lecture";
-  if (/grammaire|conjugaison|orthographe|vocabulaire|accord|verbe|phrase|nom|adjectif|pluriel|expression ecrite|dictée|dictee/.test(t)) return "grammaire";
-  // Par défaut, tout le reste est de l'éveil (Histoire, Géo, IST, Vivre ensemble, EPS...)
+  if (/grammaire|conjugaison|orthographe|vocabulaire|accord|verbe|phrase|nom|adjectif|pluriel|expression ecrite|dictee/.test(t)) return "grammaire";
   return "eveil";
+}
+
+// --- OPTIMISATIONS POUR 200 ENSEIGNANTS ---
+const CACHE = new Map(); // fiche déjà générée
+const RATE_LIMIT = new Map(); // ip -> {count, time}
+
+function getCacheKey(classe, titre) {
+  return `${classe.toLowerCase().trim()}-${titre.toLowerCase().trim()}`;
+}
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  const entry = RATE_LIMIT.get(ip) || { count: 0, time: now };
+  if (now - entry.time > 60 * 60 * 1000) { // reset chaque heure
+    entry.count = 0;
+    entry.time = now;
+  }
+  entry.count++;
+  RATE_LIMIT.set(ip, entry);
+  return entry.count > 25; // 25 fiches / heure / IP = large pour un enseignant
 }
 
 const headers = { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" };
@@ -87,9 +80,14 @@ exports.handler = async (event) => {
     return { statusCode: 405, headers, body: JSON.stringify({ error: "Méthode non autorisée" }) };
   }
 
+  const ip = event.headers['x-nf-client-connection-ip'] || event.headers['x-forwarded-for']?.split(',')[0] || 'unknown';
+  if (isRateLimited(ip)) {
+    return { statusCode: 429, headers, body: JSON.stringify({ error: "Trop de requêtes, patiente 1h. Limite: 25 fiches/heure." }) };
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: "Clé API non configurée sur le serveur" }) };
+    return { statusCode: 500, headers, body: JSON.stringify({ error: "Clé API non configurée" }) };
   }
 
   let classe, titre;
@@ -105,39 +103,46 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: "Classe et titre requis" }) };
   }
 
-  const disciplineType = detectDiscipline(titre);
-  const systemInstructionText = SYSTEM_PROMPTS[disciplineType] + "\n" + BASE_JSON_STRUCTURE;
+  // 1. CACHE CHECK
+  const cacheKey = getCacheKey(classe, titre);
+  if (CACHE.has(cacheKey)) {
+    console.log(`CACHE HIT | IP: ${ip} | ${classe} - ${titre}`);
+    return { statusCode: 200, headers, body: JSON.stringify(CACHE.get(cacheKey)) };
+  }
 
+  const disciplineType = detectDiscipline(titre);
+  const systemText = SYSTEM_PROMPTS[disciplineType] + "\n" + BASE_JSON;
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
   try {
+    console.log(`GENERATE | IP: ${ip} | ${classe} - ${titre} | Discipline: ${disciplineType}`);
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemInstructionText }] },
-        contents: [{ role: "user", parts: [{ text: `Classe : ${classe}\nTitre de la leçon : ${titre}\nDiscipline détectée : ${disciplineType}` }] }],
+        systemInstruction: { parts: [{ text: systemText }] },
+        contents: [{ role: "user", parts: [{ text: `Classe: ${classe}\nTitre: ${titre}\nDiscipline détectée: ${disciplineType}` }] }],
         generationConfig: { temperature: 0.5, responseMimeType: "application/json" },
       }),
     });
 
     const data = await res.json();
     if (!res.ok) {
-      return {
-        statusCode: 502,
-        headers,
-        body: JSON.stringify({ error: data?.error?.message || "Erreur de l'API Gemini" }),
-      };
+      console.error(`GEMINI ERROR: ${data?.error?.message}`);
+      return { statusCode: 502, headers, body: JSON.stringify({ error: data?.error?.message || "Erreur API Gemini - quota peut-être atteint" }) };
     }
 
-    let text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+    let text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
     text = text.replace(/^```json\s*|```$/g, "").trim();
     const fiche = JSON.parse(text);
 
-    // Sécurité: on force la discipline détectée dans le JSON si l'IA l'a oubliée
-    if (fiche.informations) {
-      fiche.informations.discipline = fiche.informations.discipline || titre;
+    // Sauvegarde en cache
+    CACHE.set(cacheKey, fiche);
+    // Limite la taille du cache à 200 fiches max pour ne pas saturer la mémoire
+    if (CACHE.size > 200) {
+      const firstKey = CACHE.keys().next().value;
+      CACHE.delete(firstKey);
     }
 
     return { statusCode: 200, headers, body: JSON.stringify(fiche) };
@@ -146,4 +151,3 @@ exports.handler = async (event) => {
     return { statusCode: 500, headers, body: JSON.stringify({ error: "Échec de la génération, réessayez." }) };
   }
 };
-      
